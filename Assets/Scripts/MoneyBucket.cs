@@ -8,13 +8,16 @@ public class MoneyBucket : MonoBehaviour
     [SerializeField] private Dropper dropper;
 
     [Header("Settings")]
-    [Tooltip("Amount of money to give when a ball enters this bucket.")]
+    [Tooltip("Base amount of money to give when a ball enters this bucket.")]
     [SerializeField] private int moneyValue = 10;
+
+    [Tooltip("Multiplier for money value. Final reward = moneyValue * moneyMultiplier")]
+    [SerializeField] private float moneyMultiplier = 1f;
 
     [Tooltip("Tag of the object to detect (usually the ball). Leave empty to catch all objects.")]
     [SerializeField] private string ballTag = "";
 
-    // Śledzenie przetworzonych kulek, żeby nie liczyć ich wielokrotnie
+    // Track processed balls to avoid counting them multiple times
     private HashSet<GameObject> _processedBalls = new HashSet<GameObject>();
 
     private void Start()
@@ -42,10 +45,10 @@ public class MoneyBucket : MonoBehaviour
 
     private void HandleCollision(GameObject obj)
     {
-        // Sprawdź czy ta kulka została już przetworzona
+        // Check if this ball was already processed
         if (_processedBalls.Contains(obj))
         {
-            return; // Ignoruj, już była policzona
+            return; // Ignore, already counted
         }
 
         // Check tag if specified
@@ -54,20 +57,23 @@ public class MoneyBucket : MonoBehaviour
             return;
         }
 
-        // Oznacz kulkę jako przetworzoną
+        // Mark ball as processed
         _processedBalls.Add(obj);
+
+        // Calculate final money value with multiplier
+        int finalMoneyValue = Mathf.RoundToInt(moneyValue * moneyMultiplier);
 
         // Add money
         if (MoneyManager.Instance != null)
         {
-            MoneyManager.Instance.AddMoney(moneyValue);
+            MoneyManager.Instance.AddMoney(finalMoneyValue);
         }
 
-        // Zniszcz kulkę
+        // Destroy ball
         if (dropper != null)
         {
             dropper.DestroyBall(obj);
-            Debug.Log($"[MoneyBucket] Ball destroyed. Money added: {moneyValue}");
+            Debug.Log($"[MoneyBucket] Ball destroyed. Money added: {finalMoneyValue} (base: {moneyValue} x {moneyMultiplier})");
         }
         else
         {
@@ -75,5 +81,29 @@ public class MoneyBucket : MonoBehaviour
             Destroy(obj);
         }
     }
-}
 
+    /// <summary>
+    /// Sets the money multiplier for this bucket.
+    /// </summary>
+    public void SetMoneyMultiplier(float multiplier)
+    {
+        moneyMultiplier = Mathf.Max(0f, multiplier); // Ensure non-negative
+        Debug.Log($"[MoneyBucket] Money multiplier set to {moneyMultiplier}x");
+    }
+
+    /// <summary>
+    /// Gets the current money multiplier.
+    /// </summary>
+    public float GetMoneyMultiplier()
+    {
+        return moneyMultiplier;
+    }
+
+    /// <summary>
+    /// Gets the final money value (base * multiplier).
+    /// </summary>
+    public int GetFinalMoneyValue()
+    {
+        return Mathf.RoundToInt(moneyValue * moneyMultiplier);
+    }
+}

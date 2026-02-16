@@ -31,6 +31,17 @@ public class PlinkoBoardGeneratorEditor : Editor
             EditorUtility.SetDirty(generator);
         }
 
+        GUILayout.Space(5);
+
+        // Przycisk Expand Board
+        GUI.backgroundColor = Color.green;
+        if (GUILayout.Button("Expand Board (+1 row)", GUILayout.Height(30)))
+        {
+            generator.ExpandBoard(1);
+            EditorUtility.SetDirty(generator);
+        }
+        GUI.backgroundColor = Color.white;
+
         GUILayout.Space(15);
         EditorGUILayout.LabelField("Auto-Setup Drop Button", EditorStyles.boldLabel);
 

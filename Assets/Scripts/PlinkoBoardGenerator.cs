@@ -32,11 +32,22 @@ public class PlinkoBoardGenerator : MonoBehaviour
     [Tooltip("Additional wall spacing from pegs (margin). Smaller value means walls are tighter.")]
     [SerializeField] private float wallSpacing = 0.4f;
 
+    [Tooltip("Padding/gap between MoneyBucket and walls. Increase to make bucket wider (stick to walls), decrease to make it narrower (gap from walls).")]
+    [SerializeField] private float bucketToWallPadding = 0.3f;
+
     // List storing created objects to easily remove them during regeneration
     private List<GameObject> _spawnedPegs = new List<GameObject>();
     private List<GameObject> _spawnedBuckets = new List<GameObject>();
     private List<GameObject> _spawnedWalls = new List<GameObject>();
     private GameObject _spawnedDropper;
+
+    // Cached board extrema used for precise bucket sizing/positioning
+    private float _wallTopLeftX = 0f;
+    private float _wallTopRightX = 0f;
+    private float _wallBottomLeftX = 0f;
+    private float _wallBottomRightX = 0f;
+    private float _wallTopY = 0f;
+    private float _wallBottomY = 0f;
 
     /// <summary>
     /// Generates the board anew. Can be called from another script (e.g., GameManager after purchasing an upgrade).
@@ -97,17 +108,23 @@ public class PlinkoBoardGenerator : MonoBehaviour
             }
         }
 
-        GenerateBuckets(lastRowPegCount, lastRowY);
-        GenerateWalls(minX, maxX, topY, lastRowY);
-        // Pass topMinX and topMaxX considering margin to UpdateDropperPosition
-        // We need to calculate the same thing as in GenerateWalls
+        // Cache wall extrema so buckets can be sized exactly to walls
         float margin = spacingX * wallSpacing;
         int row0Pegs = startPegsCount;
         float row0Width = (row0Pegs - 1) * spacingX;
-        float topMinX = -row0Width / 2f - margin;
-        float topMaxX = row0Width / 2f + margin;
+        // top positions (including margin)
+        _wallTopLeftX = -row0Width / 2f - margin;
+        _wallTopRightX = row0Width / 2f + margin;
+        _wallTopY = topY;
+        // bottom positions (including margin)
+        _wallBottomLeftX = minX - margin;
+        _wallBottomRightX = maxX + margin;
+        _wallBottomY = lastRowY;
 
-        UpdateDropperPosition(topY, topMinX, topMaxX);
+        GenerateBuckets(lastRowPegCount, lastRowY);
+        GenerateWalls(minX, maxX, topY, lastRowY);
+        // Use cached wall extrema for dropper sizing/position
+        UpdateDropperPosition(topY, _wallTopLeftX, _wallTopRightX);
     }
 
     // Create Walls
@@ -202,48 +219,83 @@ public class PlinkoBoardGenerator : MonoBehaviour
 
     private void GenerateBuckets(int lastRowPegCount, float lastRowY)
     {
-        if (bucketPrefab == null) return;
+        // Check if bucket already exists in scene
+        GameObject existingBucket = null;
+        
+        // First check in list
+        if (_spawnedBuckets.Count > 0 && _spawnedBuckets[0] != null)
+        {
+            existingBucket = _spawnedBuckets[0];
+        }
+        else
+        {
+            // Search in hierarchy
+            foreach (Transform child in transform)
+            {
+                if (child.name.Contains("Bucket") || child.name.Contains("bucket"))
+                {
+                    existingBucket = child.gameObject;
+                    _spawnedBuckets.Clear();
+                    _spawnedBuckets.Add(existingBucket);
+                    break;
+                }
+            }
+            
+            // Search in entire scene as fallback
+            if (existingBucket == null)
+            {
+                MoneyBucket[] bucketsInScene = Object.FindObjectsByType<MoneyBucket>(FindObjectsSortMode.None);
+                if (bucketsInScene.Length > 0)
+                {
+                    existingBucket = bucketsInScene[0].gameObject;
+                    _spawnedBuckets.Clear();
+                    _spawnedBuckets.Add(existingBucket);
+                }
+            }
+        }
 
-        // Number of buckets should be the same as gaps between pegs of the last row + halves on sides.
-        // If we have N pegs in the last row, the bottom of the pyramid has width N-1 gaps.
-        // Standardly buckets can be same amount as pegs in last row + 1, but then they stick out.
-        // Let's make buckets amount equal to pegs in last row - 1 (so they are only "inside" between pegs) 
-        // OR same amount as pegs.
-        
-        // Let's change logic: Buckets only BETWEEN pegs of the last row.
-        int bucketsCount = lastRowPegCount - 1; 
+        // If bucket exists, just update it
+        if (existingBucket != null)
+        {
+            Debug.Log($"[PlinkoBoardGenerator] Found existing MoneyBucket, updating position and scale...");
+            UpdateMoneyBucketsPosition(lastRowPegCount, lastRowY);
+            return;
+        }
 
-        // If result is 0 (e.g. 1 peg), allow 1 bucket centrally.
-        if (bucketsCount < 1) bucketsCount = 1;
-        
-        // Calculate width for buckets. They are between pegs.
-        // Pegs are at positions: X0, X1, X2...
-        // Buckets should be at: (X0+X1)/2, (X1+X2)/2...
-        
-        // Calculate bucket start
-        // First peg of last row has (pegsInThisRow - 1) * spacingX / 2 on negative.
-        float lastRowWidth = (lastRowPegCount - 1) * spacingX;
-        float lastRowStartX = -lastRowWidth / 2f; // position of first peg
+        // If bucket doesn't exist, create new one (only on first Generate Board)
+        if (bucketPrefab == null)
+        {
+            Debug.LogWarning("[PlinkoBoardGenerator] No existing MoneyBucket found and bucketPrefab is null!");
+            return;
+        }
 
-        // First bucket should be between 1st and 2nd peg
-        // Meaning lastRowStartX + (spacingX / 2)
-        
-        float bucketStartX = lastRowStartX + (spacingX / 2f);
+        // One bucket in the center, which stretches to full width
         
         // Buckets a bit lower than the last row. Increased offset to move them lower.
         float bucketY = lastRowY - (spacingY * 1.5f);
+        
+        // Calculate wall positions at bucket height (in local generator coordinates)
+        GetWallXsAtY(bucketY, out float leftLocalX, out float rightLocalX);
+        
+        // Calculate bucket width - from wall to wall
+        // Include wall thickness and padding to adjust gap
+        float wallThickness = spacingX * 0.2f;
+        float bucketWidth = Mathf.Abs(rightLocalX - leftLocalX) + (wallThickness + bucketToWallPadding) * 2f;
+        
+        // Position in center (X=0)
+        Vector3 spawnPos = transform.position + new Vector3(0, bucketY, 0);
 
-        for (int i = 0; i < bucketsCount; i++)
-        {
-            float xPos = bucketStartX + (i * spacingX);
-             Vector3 spawnPos = transform.position + new Vector3(xPos, bucketY, 0);
-
-             GameObject newBucket = Instantiate(bucketPrefab, transform);
-             newBucket.transform.position = spawnPos;
-             newBucket.name = $"Bucket_{i}";
-             
-             _spawnedBuckets.Add(newBucket);
-        }
+        GameObject newBucket = Instantiate(bucketPrefab, transform);
+        newBucket.transform.position = spawnPos;
+        newBucket.name = "MoneyBucket";
+        
+        // Scale bucket to board width (from wall to wall)
+        Vector3 currentScale = newBucket.transform.localScale;
+        newBucket.transform.localScale = new Vector3(bucketWidth, currentScale.y, currentScale.z);
+        
+        _spawnedBuckets.Add(newBucket);
+        
+        Debug.Log($"[PlinkoBoardGenerator] Created NEW MoneyBucket with width: {bucketWidth} (leftX={leftLocalX}, rightX={rightLocalX}, padding={bucketToWallPadding})");
     }
 
     /// <summary>
@@ -257,8 +309,8 @@ public class PlinkoBoardGenerator : MonoBehaviour
         {
             if (peg != null)
             {
-                // Używamy DestroyImmediate w edytorze, a Destroy w grze, 
-                // ale dla bezpieczeństwa edytora tutaj immediate jest ok.
+                // Use DestroyImmediate in editor, Destroy in game
+                // but for editor safety immediate is ok here.
                 if (Application.isPlaying) Destroy(peg);
                 else DestroyImmediate(peg);
             }
@@ -285,8 +337,8 @@ public class PlinkoBoardGenerator : MonoBehaviour
         }
         _spawnedWalls.Clear();
 
-        // Droppera nie usuwamy calkowicie, tylko ewentualnie przesuwamy, ale w ClearBoard mozna go usunac jesli chcemy full reset
-        // Decyzja: ClearBoard czysci wszystko co wygenerowane.
+        // We don't remove dropper completely, we could just move it, but ClearBoard can remove it if we want full reset
+        // Decision: ClearBoard clears everything that was generated.
         if (_spawnedDropper != null)
         {
              if (Application.isPlaying) Destroy(_spawnedDropper);
@@ -312,5 +364,209 @@ public class PlinkoBoardGenerator : MonoBehaviour
     {
         pyramidRows += splitRowsToAdd;
         GenerateBoard();
+    }
+
+    /// <summary>
+    /// Expands the board while preserving existing Dropper and MoneyBucket.
+    /// Removes only pegs and walls, then regenerates them for the larger board.
+    /// </summary>
+    [ContextMenu("Expand Board")]
+    public void ExpandBoard(int rowsToAdd = 1)
+    {
+        pyramidRows += rowsToAdd;
+        
+        // Remove only pegs and walls
+        ClearPegsAndWalls();
+        
+        if (pegPrefab == null)
+        {
+            Debug.LogError("Error: Peg Prefab not assigned in PlinkoBoardGenerator!", this);
+            return;
+        }
+
+        // --- GENERATING PEGS ---
+        int lastRowPegCount = 0;
+        float lastRowY = 0f;
+        float minX = float.MaxValue;
+        float maxX = float.MinValue;
+        float topY = 0f;
+
+        for (int row = 0; row < pyramidRows; row++)
+        {
+            int pegsInThisRow = startPegsCount + row;
+            lastRowPegCount = pegsInThisRow;
+            
+            float rowWidth = (pegsInThisRow - 1) * spacingX;
+            float startX = -rowWidth / 2f;
+            
+            float yPos = -row * spacingY; 
+            lastRowY = yPos;
+            if (row == 0) topY = yPos;
+
+            for (int col = 0; col < pegsInThisRow; col++)
+            {
+                float xPos = startX + (col * spacingX);
+                
+                if (xPos < minX) minX = xPos;
+                if (xPos > maxX) maxX = xPos;
+
+                Vector3 spawnPos = transform.position + new Vector3(xPos, yPos, 0);
+                
+                GameObject newPeg = Instantiate(pegPrefab, transform);
+                newPeg.transform.position = spawnPos;
+                newPeg.name = $"Peg_R{row}_C{col}";
+                
+                _spawnedPegs.Add(newPeg);
+            }
+        }
+
+        // Cache wall extrema for updated board
+        float margin = spacingX * wallSpacing;
+        int row0Pegs = startPegsCount;
+        float row0Width = (row0Pegs - 1) * spacingX;
+        _wallTopLeftX = -row0Width / 2f - margin;
+        _wallTopRightX = row0Width / 2f + margin;
+        _wallTopY = topY;
+        _wallBottomLeftX = minX - margin;
+        _wallBottomRightX = maxX + margin;
+        _wallBottomY = lastRowY;
+
+        // Regenerate only walls
+        GenerateWalls(minX, maxX, topY, lastRowY);
+        
+        // Update MoneyBuckets position to new position
+        UpdateMoneyBucketsPosition(lastRowPegCount, lastRowY);
+        
+        // Update dropper position for new board (use cached wall values)
+        UpdateDropperPosition(topY, _wallTopLeftX, _wallTopRightX);
+        
+        Debug.Log($"[PlinkoBoardGenerator] Board expanded to {pyramidRows} rows. Dropper and MoneyBuckets repositioned.");
+    }
+
+    /// <summary>
+    /// Removes only pegs and walls, preserving Dropper and MoneyBuckets.
+    /// </summary>
+    private void ClearPegsAndWalls()
+    {
+        // Remove pegs
+        foreach (var peg in _spawnedPegs)
+        {
+            if (peg != null)
+            {
+                if (Application.isPlaying) Destroy(peg);
+                else DestroyImmediate(peg);
+            }
+        }
+        _spawnedPegs.Clear();
+
+        // Remove walls
+        foreach (var wall in _spawnedWalls)
+        {
+            if (wall != null)
+            {
+                if (Application.isPlaying) Destroy(wall);
+                else DestroyImmediate(wall);
+            }
+        }
+        _spawnedWalls.Clear();
+    }
+
+    /// <summary>
+    /// Given a world-space Y position, returns the left and right X coordinates of the walls at that Y
+    /// by linearly interpolating between the top and bottom wall anchor points.
+    /// </summary>
+    private void GetWallXsAtY(float y, out float leftX, out float rightX)
+    {
+        // Protect against degenerate case where top and bottom Y are equal
+        if (Mathf.Approximately(_wallTopY, _wallBottomY))
+        {
+            leftX = _wallTopLeftX;
+            rightX = _wallTopRightX;
+            return;
+        }
+
+        float t = (y - _wallTopY) / (_wallBottomY - _wallTopY);
+        t = Mathf.Clamp01(t);
+
+        leftX = Mathf.Lerp(_wallTopLeftX, _wallBottomLeftX, t);
+        rightX = Mathf.Lerp(_wallTopRightX, _wallBottomRightX, t);
+    }
+
+    /// <summary>
+    /// Updates the position and scale of a single MoneyBucket after expansion.
+    /// Expands the bucket to the new board width.
+    /// </summary>
+    private void UpdateMoneyBucketsPosition(int lastRowPegCount, float lastRowY)
+    {
+        // If list is empty, find bucket
+        if (_spawnedBuckets.Count == 0 || _spawnedBuckets[0] == null)
+        {
+            Debug.LogWarning("[PlinkoBoardGenerator] _spawnedBuckets list is empty! Searching for bucket...");
+            
+            _spawnedBuckets.Clear();
+            
+            // First search in generator hierarchy
+            foreach (Transform child in transform)
+            {
+                if (child.name.Contains("Bucket") || child.name.Contains("bucket"))
+                {
+                    _spawnedBuckets.Add(child.gameObject);
+                    break; // Only one bucket
+                }
+            }
+            
+            // If not found, search in entire scene
+            if (_spawnedBuckets.Count == 0)
+            {
+                MoneyBucket[] bucketsInScene = Object.FindObjectsByType<MoneyBucket>(FindObjectsSortMode.None);
+                if (bucketsInScene.Length > 0)
+                {
+                    _spawnedBuckets.Add(bucketsInScene[0].gameObject);
+                    Debug.Log($"[PlinkoBoardGenerator] Found MoneyBucket in scene: {bucketsInScene[0].name}");
+                }
+            }
+            
+            if (_spawnedBuckets.Count == 0)
+            {
+                Debug.LogError("[PlinkoBoardGenerator] No MoneyBucket found in hierarchy or scene!");
+                return;
+            }
+            
+            Debug.Log($"[PlinkoBoardGenerator] Found MoneyBucket.");
+        }
+
+        // Should be only one bucket
+        if (_spawnedBuckets.Count > 1)
+        {
+            Debug.LogWarning($"[PlinkoBoardGenerator] Found {_spawnedBuckets.Count} buckets, but should be only 1. Using first one.");
+        }
+
+        GameObject bucket = _spawnedBuckets[0];
+        if (bucket == null)
+        {
+            Debug.LogError("[PlinkoBoardGenerator] MoneyBucket reference is null!");
+            return;
+        }
+
+        // Calculate new Y position for bucket
+        float bucketY = lastRowY - (spacingY * 1.5f);
+
+        // Calculate wall positions at bucket height (in local generator coordinates)
+        GetWallXsAtY(bucketY, out float leftLocalX, out float rightLocalX);
+
+        // Calculate bucket width - from wall to wall
+        // Include wall thickness and padding to adjust gap
+        float wallThickness = spacingX * 0.2f;
+        float bucketWidth = Mathf.Abs(rightLocalX - leftLocalX) + (wallThickness + bucketToWallPadding) * 2f;
+        
+        // Position in center (X=0, because walls are symmetric around center)
+        Vector3 newPos = transform.position + new Vector3(0, bucketY, 0);
+        bucket.transform.position = newPos;
+
+        // Set bucket width
+        Vector3 currentScale = bucket.transform.localScale;
+        bucket.transform.localScale = new Vector3(bucketWidth, currentScale.y, currentScale.z);
+
+        Debug.Log($"[PlinkoBoardGenerator] Updated MoneyBucket position to {newPos} and width to {bucketWidth} (leftX={leftLocalX}, rightX={rightLocalX}, padding={bucketToWallPadding})");
     }
 }
