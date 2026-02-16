@@ -31,14 +31,14 @@ MonoBehaviour:
   smidge: 13.9
   scanlinesStrength: 4.6
   apertureStrength: 0
-  shadowlines: 3.5
+  shadowlines: 4.3
   shadowlinesSpeed: 3.7
   shadowlinesAlpha: 0.1
   noiseSize: 4
   noiseSpeed: 0.79
   noiseAlpha: 0.016
   brightness: 1
-  contrast: 1
+  contrast: 1.06
   gamma: 1
   red: 1
   green: 1
