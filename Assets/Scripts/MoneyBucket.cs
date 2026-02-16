@@ -1,33 +1,33 @@
 ﻿using UnityEngine;
+using System.Collections.Generic;
 
-/// <summary>
-/// Collects balls and awards points/money to the player.
-/// </summary>
 public class MoneyBucket : MonoBehaviour
 {
-    [Header("Bucket Settings")]
-    [Tooltip("Amount of money awarded per collected ball.")]
-    [SerializeField] private int moneyPerBall = 10;
-
-    [Tooltip("Reference to the Dropper to recycle balls. If empty, it tries to find one automatically.")]
+    [Header("References")]
+    [Tooltip("Reference to the Dropper that spawns balls.")]
     [SerializeField] private Dropper dropper;
+
+    [Header("Settings")]
+    [Tooltip("Amount of money to give when a ball enters this bucket.")]
+    [SerializeField] private int moneyValue = 10;
+
+    [Tooltip("Tag of the object to detect (usually the ball). Leave empty to catch all objects.")]
+    [SerializeField] private string ballTag = "";
+
+    // Śledzenie przetworzonych kulek, żeby nie liczyć ich wielokrotnie
+    private HashSet<GameObject> _processedBalls = new HashSet<GameObject>();
 
     private void Start()
     {
+        // Auto-find dropper if not assigned
         if (dropper == null)
         {
-            // Find Dropper if not manually assigned
-#if UNITY_2023_1_OR_NEWER
-            dropper = FindFirstObjectByType<Dropper>();
-#else
-            dropper = FindObjectOfType<Dropper>();
-#endif
+            dropper = FindAnyObjectByType<Dropper>();
+            if (dropper == null)
+            {
+                Debug.LogError("[MoneyBucket] No Dropper found in scene!", this);
+            }
         }
-    }
-
-    private void OnTriggerEnter(Collider other)
-    {
-        HandleCollision(other.gameObject);
     }
 
     private void OnTriggerEnter2D(Collider2D other)
@@ -35,35 +35,45 @@ public class MoneyBucket : MonoBehaviour
         HandleCollision(other.gameObject);
     }
 
-    private void HandleCollision(GameObject ball)
+    private void OnTriggerEnter(Collider other)
     {
-        // Add logic here to check if the object is indeed a ball, if you have other physics objects.
-        // For simplicity, we assume anything falling into the bucket is a ball.
-
-        AddMoney(moneyPerBall);
-
-        if (dropper != null)
-        {
-            dropper.ReturnToPool(ball);
-        }
-        else
-        {
-            // Fallback if no dropper logic exists
-            Debug.LogWarning("Dropper reference missing in MoneyBucket! Destroying ball.");
-            Destroy(ball);
-        }
+        HandleCollision(other.gameObject);
     }
 
-    private void AddMoney(int amount)
+    private void HandleCollision(GameObject obj)
     {
-        // Use the MoneyManager singleton if it exists
+        // Sprawdź czy ta kulka została już przetworzona
+        if (_processedBalls.Contains(obj))
+        {
+            return; // Ignoruj, już była policzona
+        }
+
+        // Check tag if specified
+        if (!string.IsNullOrEmpty(ballTag) && !obj.CompareTag(ballTag))
+        {
+            return;
+        }
+
+        // Oznacz kulkę jako przetworzoną
+        _processedBalls.Add(obj);
+
+        // Add money
         if (MoneyManager.Instance != null)
         {
-            MoneyManager.Instance.AddMoney(amount);
+            MoneyManager.Instance.AddMoney(moneyValue);
+        }
+
+        // Zniszcz kulkę
+        if (dropper != null)
+        {
+            dropper.DestroyBall(obj);
+            Debug.Log($"[MoneyBucket] Ball destroyed. Money added: {moneyValue}");
         }
         else
         {
-            Debug.Log($"Collected a ball! Added ${amount} (No MoneyManager found).");
+            Debug.LogWarning("[MoneyBucket] Dropper reference is null! Destroying ball directly.");
+            Destroy(obj);
         }
     }
 }
+

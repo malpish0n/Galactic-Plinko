@@ -10,9 +10,6 @@ public class Dropper : MonoBehaviour
     [Tooltip("Time in seconds between drops (if auto-drop is enabled).")]
     [SerializeField] private float spawnInterval = 0.5f;
 
-    [Tooltip("Minimum time in seconds between manual drops (button click).")]
-    [SerializeField] private float manualDropCooldown = 0.2f;
-
     [Tooltip("Should balls drop automatically?")]
     [SerializeField] private bool autoDrop;
 
@@ -23,23 +20,11 @@ public class Dropper : MonoBehaviour
     [Tooltip("Width of the area from which balls will be dropped (X axis).")]
     [SerializeField] private float spawnWidth = 1.0f;
 
-    [Header("Pool Settings")]
-    [Tooltip("Initial size of the object pool.")]
-    [SerializeField] private int initialPoolSize = 20;
-
-    [Tooltip("Y position below which balls are returned to the pool.")]
+    [Tooltip("Y position below which balls are destroyed (fallback cleanup).")]
     [SerializeField] private float destroyYThreshold = -20f;
 
-    // Queue serving as the object pool
-    private readonly Queue<GameObject> _ballPool = new Queue<GameObject>();
-    private readonly List<GameObject> _activeBalls = new List<GameObject>(); // Track active balls to check their position
+    private List<GameObject> _activeBalls = new List<GameObject>();
     private float _timer;
-    private float _lastManualDropTime = -999f; // Allow immediate first drop
-
-    private void Awake()
-    {
-        InitializePool();
-    }
 
     private void Update()
     {
@@ -55,106 +40,68 @@ public class Dropper : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Checks if any active balls have fallen below the threshold and recycles them.
-    /// </summary>
+    private void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.green;
+        Vector3 center = transform.position + new Vector3(0, spawnOffsetY, 0);
+        Gizmos.DrawWireCube(center, new Vector3(spawnWidth, 0.5f, 0.1f));
+        Gizmos.DrawLine(transform.position, center);
+    }
+
     private void CheckActiveBalls()
     {
         for (int i = _activeBalls.Count - 1; i >= 0; i--)
         {
             GameObject ball = _activeBalls[i];
             
-            // If ball was destroyed externally (shouldn't happen often), just remove from list
             if (ball == null)
             {
                 _activeBalls.RemoveAt(i);
                 continue;
             }
 
+            // Jeśli kulka spadła za nisko, zniszcz ją (fallback cleanup)
             if (ball.transform.position.y < destroyYThreshold)
             {
-                // ReturnToPool will handle removing from the list now
-                ReturnToPool(ball);
+                _activeBalls.RemoveAt(i);
+                Destroy(ball);
+                Debug.Log($"[Dropper] Ball destroyed (fell too low). Active: {_activeBalls.Count}");
             }
         }
     }
 
-    /// <summary>
-    /// Initializes the object pool to avoid performance drops.
-    /// </summary>
-    private void InitializePool()
+    public void DropBall()
     {
         if (ballPrefab == null)
         {
-            Debug.LogError("Ball Prefab is not assigned in Dropper!", this);
+            Debug.LogError("[Dropper] Ball Prefab is null!");
             return;
         }
 
-        for (int i = 0; i < initialPoolSize; i++)
-        {
-            CreateNewBallForPool();
-        }
-    }
-
-    /// <summary>
-    /// Creates a new ball and adds it to the pool.
-    /// </summary>
-    private GameObject CreateNewBallForPool()
-    {
-        // Instantiate without a parent initially to avoid inheriting the Dropper's scale
-        GameObject ball = Instantiate(ballPrefab);
-        
-        // Ensure scale is correct from prefab
-        ball.transform.localScale = ballPrefab.transform.localScale;
-
-        ball.SetActive(false);
-        _ballPool.Enqueue(ball);
-        return ball;
-    }
-
-    /// <summary>
-    /// Tries to drop a ball manually. Connect this to your UI Button.
-    /// </summary>
-    public void DropBallManual()
-    {
-        if (Time.time >= _lastManualDropTime + manualDropCooldown)
-        {
-            DropBall();
-            _lastManualDropTime = Time.time;
-        }
-    }
-
-    /// <summary>
-    /// Public method to drop a ball.
-    /// </summary>
-    public void DropBall()
-    {
-        if (ballPrefab == null) return;
-
-        GameObject ball = GetBallFromPool();
-
-        // Calculate random X position
+        // Losowa pozycja w całym zakresie spawnWidth (bez dead zone)
         float randomX = Random.Range(-spawnWidth / 2f, spawnWidth / 2f);
-
-        // Spawn from the center of this object with Y offset and random X
+        
         Vector3 spawnPosition = transform.position + new Vector3(randomX, spawnOffsetY, 0);
 
-        ball.transform.position = spawnPosition;
-        ball.transform.rotation = Quaternion.identity;
-        ball.transform.localScale = ballPrefab.transform.localScale; // Force reset scale again
-        ball.SetActive(true);
+        // Stwórz nową kulkę
+        GameObject ball = Instantiate(ballPrefab, spawnPosition, Quaternion.identity);
+        ball.transform.localScale = ballPrefab.transform.localScale;
 
-        _activeBalls.Add(ball); // Track this active ball
+        // Upewnij się, że kulka ma skrypt Ball (anti-stuck)
+        if (ball.GetComponent<Ball>() == null)
+        {
+            ball.AddComponent<Ball>();
+        }
+
+        _activeBalls.Add(ball);
 
         ResetPhysics(ball);
+        
+        Debug.Log($"[Dropper] Ball dropped at {spawnPosition}. Active: {_activeBalls.Count}");
     }
 
-    /// <summary>
-    /// Resets object velocity (important when reusing from pool).
-    /// </summary>
     private void ResetPhysics(GameObject ball)
     {
-        // 3D physics handling
         Rigidbody rb = ball.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -163,7 +110,6 @@ public class Dropper : MonoBehaviour
             return;
         }
 
-        // 2D physics handling
         Rigidbody2D rb2d = ball.GetComponent<Rigidbody2D>();
         if (rb2d != null)
         {
@@ -172,44 +118,18 @@ public class Dropper : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Retrieves a ball from the pool.
-    /// </summary>
-    private GameObject GetBallFromPool()
-    {
-        if (_ballPool.Count == 0)
-        {
-            return CreateNewBallForPool();
-        }
-
-        GameObject ball = _ballPool.Dequeue();
-
-        // If the retrieved ball is still active (e.g. pool is too small),
-        // create a new one instead of taking the one visible to the player.
-        if (ball.activeInHierarchy)
-        {
-            // Add the active one back to the queue for later
-            _ballPool.Enqueue(ball);
-            return CreateNewBallForPool();
-        }
-
-        return ball;
-    }
-
-    /// <summary>
-    /// Returns a ball back to the pool.
-    /// </summary>
-    public void ReturnToPool(GameObject ball)
+    // Publiczna metoda do niszczenia kulki (wywoływana przez MoneyBucket)
+    public void DestroyBall(GameObject ball)
     {
         if (ball == null) return;
 
-        ball.SetActive(false);
-        _ballPool.Enqueue(ball);
-
-        // Remove from active list if presents, to avoid duplicates or tracking recycled balls
         if (_activeBalls.Contains(ball))
         {
             _activeBalls.Remove(ball);
         }
+
+        Destroy(ball);
+        Debug.Log($"[Dropper] Ball destroyed. Active: {_activeBalls.Count}");
     }
 }
+
